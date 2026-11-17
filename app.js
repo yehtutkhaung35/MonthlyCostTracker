@@ -6,7 +6,7 @@
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.3.3';
+const APP_VERSION = '0.3.4';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -216,9 +216,21 @@ function leftLine(left) {
     ? `<span>${T('leftAmt', { amt: money(left) })}</span>`
     : `<span class="neg">⚠ ${T('overAmt', { amt: money(-left) })}</span>`;
 }
+/** Per-day types: money saved so far this month (+ / −). */
 function savedBadge(v) {
   const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'muted';
   return `<span class="saved ${cls}" title="${esc(T('savedHint'))}">(${money(v, { sign: true })})</span>`;
+}
+/** Monthly types: what is left of this month's budget; red and negative when overspent. */
+function leftBadge(v) {
+  const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'muted';
+  return `<span class="saved ${cls}" title="${esc(T('leftHint'))}">(${money(v)})</span>`;
+}
+/** The badge beside a budget type's name: saved for per-day types, left for monthly types. */
+const typeBadge = (s) => (s.t.rule === 'day' ? savedBadge(s.saved) : leftBadge(s.left));
+/** ✅ when a day's spending stayed within that day's allowance. */
+function okMark(spent, allowance) {
+  return allowance > 0 && spent <= allowance ? ` <span class="ok" title="${esc(T('withinBudget'))}" aria-label="${esc(T('withinBudget'))}">✅</span>` : '';
 }
 function entryRow(e) {
   if (e.noSpend) {
@@ -276,7 +288,7 @@ function viewHome() {
   todayTypes.forEach((s) => {
     h += `<div class="today-type">
       <div class="row-between"><span class="tname">${s.t.emoji} ${esc(typeName(s.t))} ${savedBadge(s.saved)}</span></div>
-      <div class="today-num"><strong>${money(s.todaySpent)}</strong> <span class="muted">/ ${money(s.t.amount)}</span></div>
+      <div class="today-num"><strong>${money(s.todaySpent)}</strong> <span class="muted">/ ${money(s.t.amount)}</span>${okMark(s.todaySpent, s.t.amount)}</div>
       ${bar(s.todaySpent, s.t.amount, s.t.color)}
       <div class="small">${s.todayLeft >= 0 ? T('leftToday', { amt: money(s.todayLeft) }) : `<span class="neg">⚠ ${T('overToday', { amt: money(-s.todayLeft) })}</span>`}</div>
       <div class="small muted">${T('typeDaysLeft', { n: s.daysLeft, name: esc(typeName(s.t)), amt: money(s.daysLeft * s.t.amount) })}</div>
@@ -290,7 +302,7 @@ function viewHome() {
   h += `<h2 class="sec out">${T('types')}</h2><div class="tgrid">`;
   stats.filter((s) => !s.t.archived).forEach((s) => {
     h += `<button class="card tcard" data-act="type-history" data-id="${s.t.id}">
-      <div class="tname">${s.t.emoji} ${esc(typeName(s.t))} ${savedBadge(s.saved)}</div>
+      <div class="tname">${s.t.emoji} ${esc(typeName(s.t))} ${typeBadge(s)}</div>
       <div class="tnum"><strong>${num(s.spent)}</strong> <span class="muted">/ ${num(s.budget)}</span></div>
       ${bar(s.spent, s.budget, s.t.color)}
       <div class="small">${leftLine(s.left)}</div>
@@ -357,7 +369,7 @@ function viewHistoryDay() {
   dayTypes.forEach((t) => {
     const s = sumAmt(items.filter((e) => e.typeId === t.id));
     h += `<div class="trow">
-      <div class="row-between"><span class="tname">${t.emoji} ${esc(typeName(t))}</span><span class="tabnum"><strong>${num(s)}</strong> <span class="muted">/ ${num(t.amount)}</span></span></div>
+      <div class="row-between"><span class="tname">${t.emoji} ${esc(typeName(t))}</span><span class="tabnum"><strong>${num(s)}</strong> <span class="muted">/ ${num(t.amount)}</span>${ds <= today ? okMark(s, t.amount) : ''}</span></div>
       ${bar(s, t.amount, t.color)}
       <div class="small">${leftLine(t.amount - s)}</div></div>`;
   });

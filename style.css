@@ -143,6 +143,7 @@ h1, h2 { margin: 0; }
 .today-num { font-size: 22px; }
 .tname { font-weight: 600; }
 .saved { font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ok { font-size: 0.8em; }
 
 /* ---------- type cards ---------- */
 .tgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
