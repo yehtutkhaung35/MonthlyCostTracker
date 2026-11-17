@@ -1,7 +1,7 @@
 /* Service worker: lets the installed app open offline.
  * Network first (so updates show up right away), cached copy when offline.
  * Bump CACHE when you release, to clear old files. */
-const CACHE = 'mct-v2';
+const CACHE = 'mct-v4';
 const ASSETS = [
   './',
   'index.html',

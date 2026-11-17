@@ -80,7 +80,12 @@ body {
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Myanmar", "Myanmar Text", sans-serif;
   padding-bottom: calc(var(--tabs-h) + 96px + env(safe-area-inset-bottom));
   -webkit-tap-highlight-color: transparent;
+  /* App-like feel: tapping text should not select it or trigger Chrome's "Touch to Search" pop-up. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+input, textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 html[lang="my"] body { line-height: 1.75; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -188,7 +193,11 @@ h1, h2 { margin: 0; }
 .month-label { border: 0; background: none; font-weight: 700; font-size: 17px; padding: 8px; }
 .hist-total { padding: 0 4px; }
 .day-group { padding-top: 10px; padding-bottom: 6px; }
-.day-head { font-size: 13px; font-weight: 600; padding-bottom: 4px; }
+.day-head { font-size: 13px; font-weight: 600; padding: 0 0 4px; width: 100%; border: 0; background: none; text-align: left; }
+.month-nav { position: relative; }
+.day-label { flex: 1; }
+.hero-day { font-size: 22px; }
+.hidden-date { position: absolute; left: 50%; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 
 /* ---------- chips & buttons ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }

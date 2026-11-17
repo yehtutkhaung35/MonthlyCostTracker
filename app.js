@@ -6,7 +6,7 @@
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.1';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -68,7 +68,7 @@ function load() {
 }
 
 let data = load();
-const ui = { tab: 'home', ym: currentYM(), filter: 'all', sheetOpen: false };
+const ui = { tab: 'home', ym: currentYM(), filter: 'all', sheetOpen: false, histMode: 'day', day: todayStr() };
 let persistAsked = false;
 
 /** Save to this device. Unless the save comes from sync itself, also queue a sync to Google. */
@@ -314,6 +314,47 @@ function calendar(y, m) {
 }
 
 function viewHistory() {
+  const modes = `<div class="seg">${[['day', T('hist.day')], ['month', T('hist.month')]].map(([v, label]) =>
+    `<button data-act="hist-mode" data-v="${v}" class="${ui.histMode === v ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+  return modes + (ui.histMode === 'day' ? viewHistoryDay() : viewHistoryMonth());
+}
+
+/** One day: pick a date, see that day's budget and everything entered for it. */
+function viewHistoryDay() {
+  const ds = ui.day;
+  const today = todayStr();
+  const d = parseYmd(ds);
+  const items = liveEntries().filter((e) => e.date === ds).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const spent = sumAmt(items.filter((e) => !e.noSpend));
+
+  let h = `<div class="month-nav">
+    <button class="icon-btn" data-act="day-prev" aria-label="Previous day">‹</button>
+    <button class="month-label day-label" data-act="day-pick">📅 ${dateLabel(ds)}${d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : ''}</button>
+    <button class="icon-btn" data-act="day-next" aria-label="Next day">›</button>
+    <input type="date" id="dayInput" class="hidden-date" value="${ds}" tabindex="-1" aria-hidden="true">
+  </div>`;
+  if (ds !== today) h += `<div class="center"><button class="chip" data-act="day-today">${T('hist.today')}</button></div>`;
+
+  // Per-day budgets that apply on this date (Daily Cost, or Saturday on Saturdays)
+  const dayTypes = activeTypes().filter((t) => t.rule === 'day' && t.days.includes(d.getDay()));
+  h += `<section class="card"><div class="row-between"><span class="muted">${T('hist.dayTotal')}</span><strong class="hero-day">${money(spent)}</strong></div>`;
+  dayTypes.forEach((t) => {
+    const s = sumAmt(items.filter((e) => e.typeId === t.id));
+    h += `<div class="trow">
+      <div class="row-between"><span class="tname">${t.emoji} ${esc(typeName(t))}</span><span class="tabnum"><strong>${num(s)}</strong> <span class="muted">/ ${num(t.amount)}</span></span></div>
+      ${bar(s, t.amount, t.color)}
+      <div class="small">${leftLine(t.amount - s)}</div></div>`;
+  });
+  h += `</section>`;
+
+  h += `<section class="card">`;
+  if (items.length) h += `<div class="elist">${items.map(entryRow).join('')}</div>`;
+  else h += `<p class="muted center">${T('hist.emptyDay')}</p>`;
+  h += `<button class="btn ghost full" data-act="add">+ ${T('hist.addForDay')}</button></section>`;
+  return h;
+}
+
+function viewHistoryMonth() {
   const { y, m } = ui.ym;
   const k = monthKeyOf(y, m);
   const monthAll = liveEntries().filter((e) => e.date.startsWith(k));
@@ -336,7 +377,7 @@ function viewHistory() {
     .forEach((e) => { if (!groups.has(e.date)) groups.set(e.date, []); groups.get(e.date).push(e); });
   groups.forEach((items, date) => {
     h += `<section class="card day-group">
-      <div class="row-between day-head"><span>${dateLabel(date)}</span><span class="muted">${money(sumAmt(items.filter((e) => !e.noSpend)))}</span></div>
+      <button class="row-between day-head" data-act="open-day" data-v="${date}"><span>${dateLabel(date)} ›</span><span class="muted">${money(sumAmt(items.filter((e) => !e.noSpend)))}</span></button>
       <div class="elist">${items.map(entryRow).join('')}</div></section>`;
   });
   return h;
@@ -568,11 +609,12 @@ function typeInfo(typeId, date, excludeId) {
   return T('info.month', { left: money(t.amount - sumAmt(others.filter((e) => e.date.startsWith(mk)))) });
 }
 
-function openEntrySheet(id) {
+function openEntrySheet(id, presetDate) {
   const src = id ? data.entries.find((e) => e.id === id) : null;
   const types = activeTypes();
   if (!types.length) { ui.tab = 'settings'; render(); return; }
-  const st = { typeId: src ? src.typeId : defaultTypeFor(todayStr()).id, date: src ? src.date : todayStr(), touched: !!src };
+  const startDate = src ? src.date : (presetDate || todayStr());
+  const st = { typeId: src ? src.typeId : defaultTypeFor(startDate).id, date: startDate, touched: !!src };
   const chipTypes = types.slice();
   if (src && !types.some((t) => t.id === src.typeId) && typeById(src.typeId)) chipTypes.push(typeById(src.typeId));
 
@@ -796,7 +838,18 @@ function setTip(el) {
 
 const actions = {
   tab: (el) => { ui.tab = el.dataset.v; if (ui.tab !== 'history') ui.filter = 'all'; render(); window.scrollTo(0, 0); },
-  add: () => openEntrySheet(),
+  // In History's day view, new entries default to the day being viewed.
+  add: () => openEntrySheet(null, ui.tab === 'history' && ui.histMode === 'day' ? ui.day : null),
+  'hist-mode': (el) => { ui.histMode = el.dataset.v; render(); },
+  'day-prev': () => { ui.day = addDays(ui.day, -1); render(); },
+  'day-next': () => { ui.day = addDays(ui.day, 1); render(); },
+  'day-today': () => { ui.day = todayStr(); render(); },
+  'day-pick': () => {
+    const inp = $('#dayInput');
+    if (!inp) return;
+    try { inp.showPicker(); } catch (e) { inp.focus(); inp.click(); }
+  },
+  'open-day': (el) => { ui.histMode = 'day'; ui.day = el.dataset.v; render(); window.scrollTo(0, 0); },
   'edit-entry': (el) => openEntrySheet(el.dataset.id),
   nospend: () => {
     const t = nowIso();
@@ -812,7 +865,7 @@ const actions = {
   'month-next': () => shiftMonth(1),
   'month-today': () => { ui.ym = currentYM(); render(); },
   filter: (el) => { ui.filter = el.dataset.v; render(); },
-  'type-history': (el) => { ui.tab = 'history'; ui.filter = el.dataset.id; ui.ym = currentYM(); render(); window.scrollTo(0, 0); },
+  'type-history': (el) => { ui.tab = 'history'; ui.histMode = 'month'; ui.filter = el.dataset.id; ui.ym = currentYM(); render(); window.scrollTo(0, 0); },
   'edit-type': (el) => openTypeSheet(el.dataset.id),
   'add-type': () => openTypeSheet(),
   'set-lang': (el) => { data.settings.lang = el.dataset.v; save({ fromSync: true }); render(); },
@@ -855,6 +908,8 @@ document.addEventListener('change', (e) => {
     data.settings.example = false;
     data.settings.totalUpdatedAt = nowIso();
     save(); render();
+  } else if (el.id === 'dayInput') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { ui.day = el.value; render(); }
   } else if (el.id === 'importFile') {
     importFile(el.files && el.files[0]);
     el.value = '';
