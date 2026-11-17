@@ -6,7 +6,7 @@
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -26,8 +26,12 @@ const currentYM = () => { const d = new Date(); return { y: d.getFullYear(), m: 
 const colorVar = (c) => (c === 'accent' ? 'var(--accent)' : `var(--s${c})`);
 
 /* ---------- data ---------- */
+const PALETTES = ['blue', 'ember', 'forest', 'ocean', 'rose', 'lavender', 'mono'];
+// Untouched example data gets the oldest possible timestamp, so real edits from any device always win a sync.
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
 function defaultData() {
-  const t = nowIso();
+  const t = EPOCH;
   const types = [
     { id: 'daily', key: 'daily', emoji: '🍜', color: 1, rule: 'day', amount: 8000, days: [0, 1, 2, 3, 4, 5] },
     { id: 'saturday', key: 'saturday', emoji: '🎉', color: 2, rule: 'day', amount: 30000, days: [6] },
@@ -37,9 +41,10 @@ function defaultData() {
   ].map((x, i) => Object.assign({ name: '', archived: false, order: i, updatedAt: t }, x));
   return {
     version: 1,
-    settings: { lang: 'en', theme: 'system', currency: 'Ks', monthlyTotal: 600000, example: true, updatedAt: t },
+    settings: { lang: 'en', theme: 'system', palette: 'blue', currency: 'Ks', monthlyTotal: 600000, totalUpdatedAt: '', example: true, updatedAt: t },
     types,
     entries: [],
+    sync: {},
   };
 }
 
@@ -49,7 +54,11 @@ function load() {
     if (raw) {
       const d = JSON.parse(raw);
       if (d && Array.isArray(d.entries) && Array.isArray(d.types)) {
+        const hadTotalTs = !!(d.settings && d.settings.totalUpdatedAt !== undefined);
         d.settings = Object.assign(defaultData().settings, d.settings || {});
+        // Data from before sync existed: treat a customised monthly total as a real edit.
+        if (!hadTotalTs && !d.settings.example) d.settings.totalUpdatedAt = nowIso();
+        if (!d.sync) d.sync = {};
         d.types.forEach((t) => { if (!Array.isArray(t.days)) t.days = []; });
         return d;
       }
@@ -62,7 +71,10 @@ let data = load();
 const ui = { tab: 'home', ym: currentYM(), filter: 'all', sheetOpen: false };
 let persistAsked = false;
 
-function save() {
+/** Save to this device. Unless the save comes from sync itself, also queue a sync to Google. */
+function save(opts) {
+  const fromSync = !!(opts && opts.fromSync);
+  if (!fromSync) Sync.markDirty();
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(data));
   } catch (e) {
@@ -72,6 +84,7 @@ function save() {
     persistAsked = true;
     navigator.storage.persist().catch(() => {});
   }
+  if (!fromSync) { Sync.updatePill(); Sync.schedule(); }
 }
 
 /* ---------- i18n & formatting ---------- */
@@ -424,6 +437,9 @@ function viewSettings() {
     ${seg('set-lang', s.lang, [['en', 'English'], ['my', 'မြန်မာ']])}
     <h2 class="sec">${T('theme')}</h2>
     ${seg('set-theme', s.theme, [['system', T('theme.system')], ['light', T('theme.light')], ['dark', T('theme.dark')]])}
+    <h2 class="sec">${T('palette')}</h2>
+    <div class="palettes">${PALETTES.map((p) => `<button class="pal${s.palette === p ? ' on' : ''}" data-act="set-palette" data-v="${p}" data-palette="${p}" aria-pressed="${s.palette === p}">
+      <span class="pal-prev"><i></i><b>Ks</b></span><span class="pal-name">${T('pal.' + p)}</span></button>`).join('')}</div>
   </section>
 
   <section class="card">
@@ -441,10 +457,7 @@ function viewSettings() {
     <button class="btn ghost full" data-act="add-type">+ ${T('addType')}</button>
   </section>
 
-  <section class="card">
-    <h2 class="sec">${T('sync')}</h2>
-    <p class="muted">${T('syncSoon')}</p>
-  </section>
+  ${Sync.settingsCard()}
 
   <section class="card">
     <h2 class="sec">${T('data')}</h2>
@@ -474,14 +487,25 @@ const ICONS = {
 };
 
 function applyTheme() {
+  const root = document.documentElement;
   const th = data.settings.theme;
-  if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th;
-  else delete document.documentElement.dataset.theme;
+  if (th === 'light' || th === 'dark') root.dataset.theme = th;
+  else delete root.dataset.theme;
+  root.dataset.palette = PALETTES.includes(data.settings.palette) ? data.settings.palette : 'blue';
+  // Match the phone's status bar to the page color.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = getComputedStyle(root).getPropertyValue('--page').trim() || '#f9f9f7';
+}
+// Follow the phone switching light/dark while the app is open.
+if (window.matchMedia) {
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  if (mq.addEventListener) mq.addEventListener('change', applyTheme);
 }
 
 function render() {
   document.documentElement.lang = data.settings.lang === 'my' ? 'my' : 'en';
   $('#title').textContent = T('tab.' + ui.tab);
+  Sync.updatePill();
   $('#streak').innerHTML = `<button class="streak" data-act="streak" aria-label="${esc(T('streakTip', { n: streak() }))}">🔥 ${streak()}</button>`;
   $('#tabs').innerHTML = ['home', 'history', 'stats', 'settings'].map((k) =>
     `<button data-act="tab" data-v="${k}" class="${ui.tab === k ? 'on' : ''}"${ui.tab === k ? ' aria-current="page"' : ''}>
@@ -791,14 +815,20 @@ const actions = {
   'type-history': (el) => { ui.tab = 'history'; ui.filter = el.dataset.id; ui.ym = currentYM(); render(); window.scrollTo(0, 0); },
   'edit-type': (el) => openTypeSheet(el.dataset.id),
   'add-type': () => openTypeSheet(),
-  'set-lang': (el) => { data.settings.lang = el.dataset.v; data.settings.updatedAt = nowIso(); save(); render(); },
-  'set-theme': (el) => { data.settings.theme = el.dataset.v; data.settings.updatedAt = nowIso(); save(); applyTheme(); render(); },
-  'export-json': () => download(`monthly-cost-backup-${todayStr()}.json`, JSON.stringify(data, null, 2), 'application/json'),
+  'set-lang': (el) => { data.settings.lang = el.dataset.v; save({ fromSync: true }); render(); },
+  'set-theme': (el) => { data.settings.theme = el.dataset.v; save({ fromSync: true }); applyTheme(); render(); },
+  'set-palette': (el) => { data.settings.palette = el.dataset.v; save({ fromSync: true }); applyTheme(); render(); },
+  'sync-connect': () => Sync.connect(),
+  'sync-tap': () => Sync.tap(),
+  'sync-disconnect': () => { if (confirm(T('sync.signOutConfirm'))) Sync.disconnect(); },
+  'export-json': () => download(`monthly-cost-backup-${todayStr()}.json`,
+    JSON.stringify(Object.assign({}, data, { sync: undefined }), null, 2), 'application/json'),
   'import-json': () => $('#importFile').click(),
   'export-csv': exportCsv,
   reset: () => {
     if (!confirm(T('resetConfirm'))) return;
     const lang = data.settings.lang;
+    Sync.disconnect(true); // forget the Google link on this device too (the Sheet itself is not touched)
     data = defaultData();
     data.settings.lang = lang;
     save(); applyTheme(); render();
@@ -823,7 +853,7 @@ document.addEventListener('change', (e) => {
   if (el.id === 'totalInput') {
     data.settings.monthlyTotal = parseAmt(el.value);
     data.settings.example = false;
-    data.settings.updatedAt = nowIso();
+    data.settings.totalUpdatedAt = nowIso();
     save(); render();
   } else if (el.id === 'importFile') {
     importFile(el.files && el.files[0]);
@@ -831,7 +861,11 @@ document.addEventListener('change', (e) => {
   }
 });
 // When the installed app comes back to the foreground (e.g. the next day), refresh the numbers.
-document.addEventListener('visibilitychange', () => { if (!document.hidden && !ui.sheetOpen) render(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (!ui.sheetOpen) render();
+  Sync.schedule(300); // pick up changes made on another device
+});
 
 /* ---------- start ---------- */
 applyTheme();
@@ -839,6 +873,7 @@ const params = new URLSearchParams(location.search);
 if (['home', 'history', 'stats', 'settings'].includes(params.get('tab'))) ui.tab = params.get('tab');
 render();
 if (params.get('action') === 'add') openEntrySheet();
+Sync.onStart();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

@@ -1,40 +1,70 @@
-/* ---------- tokens ---------- */
+/* ---------- tokens ----------
+ * Each color theme (data-palette) defines a light set (-l) and a dark set (-d).
+ * The mode (System / Light / Dark) then picks which set is used.
+ * Budget-type colors (--s1..--s8) are the same in every theme so a type keeps its color.
+ */
 :root {
+  --radius: 16px;
+  --tabs-h: 64px;
+  --muted-l: #898781; --muted-d: #898781;
+  --ring-l: rgba(11, 11, 11, 0.10); --ring-d: rgba(255, 255, 255, 0.10);
+}
+:root, [data-palette="blue"] {
+  --page-l: #f9f9f7; --card-l: #ffffff; --ink-l: #0b0b0b; --ink2-l: #52514e; --line-l: #e1e0d9; --track-l: #ecebe6; --accent-l: #2a78d6; --on-accent-l: #ffffff;
+  --page-d: #0d0d0d; --card-d: #1a1a19; --ink-d: #f0efec; --ink2-d: #c3c2b7; --line-d: #2c2c2a; --track-d: #2a2a28; --accent-d: #3987e5; --on-accent-d: #ffffff;
+}
+[data-palette="ember"] {
+  --page-l: #e6e5e3; --card-l: #f3f2f0; --ink-l: #2b2724; --ink2-l: #5c544d; --line-l: #d6d3cf; --track-l: #dcd9d5; --accent-l: #d9772f; --on-accent-l: #ffffff; --muted-l: #857c74;
+  --page-d: #262626; --card-d: #313131; --ink-d: #f6dcc4; --ink2-d: #d9b89a; --line-d: #3f3f3f; --track-d: #3b3b3b; --accent-d: #f4a261; --on-accent-d: #262626; --muted-d: #a8988a;
+}
+[data-palette="forest"] {
+  --page-l: #f2f5f1; --card-l: #ffffff; --ink-l: #102015; --ink2-l: #4b5a4f; --line-l: #dfe6dd; --track-l: #e5ebe3; --accent-l: #2e7d4f; --on-accent-l: #ffffff;
+  --page-d: #0e1410; --card-d: #18211b; --ink-d: #e8f0e9; --ink2-d: #b5c4b8; --line-d: #26332a; --track-d: #233027; --accent-d: #4caf74; --on-accent-d: #0e1410;
+}
+[data-palette="ocean"] {
+  --page-l: #f1f6f7; --card-l: #ffffff; --ink-l: #0b1f24; --ink2-l: #4a6066; --line-l: #d9e6e8; --track-l: #e1ecee; --accent-l: #0f7f8c; --on-accent-l: #ffffff;
+  --page-d: #0a1316; --card-d: #142024; --ink-d: #e6f2f4; --ink2-d: #b0c8cd; --line-d: #223338; --track-d: #1f3035; --accent-d: #2bb3c0; --on-accent-d: #0a1316;
+}
+[data-palette="rose"] {
+  --page-l: #fbf4f5; --card-l: #ffffff; --ink-l: #2a1218; --ink2-l: #6b4b52; --line-l: #f0dfe2; --track-l: #f3e6e8; --accent-l: #d14d72; --on-accent-l: #ffffff;
+  --page-d: #160d10; --card-d: #22161a; --ink-d: #f7e8eb; --ink2-d: #d6b9c0; --line-d: #36242a; --track-d: #321f25; --accent-d: #e8799a; --on-accent-d: #160d10;
+}
+[data-palette="lavender"] {
+  --page-l: #f6f4fb; --card-l: #ffffff; --ink-l: #17132a; --ink2-l: #554f6b; --line-l: #e4e0f0; --track-l: #ebe8f4; --accent-l: #6a55d1; --on-accent-l: #ffffff;
+  --page-d: #0f0d18; --card-d: #1b1826; --ink-d: #ece9f7; --ink2-d: #c0bad6; --line-d: #2c283b; --track-d: #282436; --accent-d: #9b8cf0; --on-accent-d: #0f0d18;
+}
+[data-palette="mono"] {
+  --page-l: #f4f4f4; --card-l: #ffffff; --ink-l: #111111; --ink2-l: #555555; --line-l: #e2e2e2; --track-l: #e8e8e8; --accent-l: #2b2b2b; --on-accent-l: #ffffff;
+  --page-d: #101010; --card-d: #1c1c1c; --ink-d: #eeeeee; --ink2-d: #bbbbbb; --line-d: #2e2e2e; --track-d: #2a2a2a; --accent-d: #e6e6e6; --on-accent-d: #111111;
+}
+
+/* light mode (default) */
+:root, [data-palette] {
   color-scheme: light;
-  --page: #f9f9f7;
-  --card: #ffffff;
-  --ink: #0b0b0b;
-  --ink2: #52514e;
-  --muted: #898781;
-  --line: #e1e0d9;
-  --track: #ecebe6;
-  --ring: rgba(11, 11, 11, 0.10);
-  --accent: #2a78d6;
-  --on-accent: #ffffff;
-  --good: #006300;
-  --bad: #d03b3b;
+  --page: var(--page-l); --card: var(--card-l); --ink: var(--ink-l); --ink2: var(--ink2-l); --muted: var(--muted-l);
+  --line: var(--line-l); --track: var(--track-l); --ring: var(--ring-l); --accent: var(--accent-l); --on-accent: var(--on-accent-l);
+  --good: #006300; --bad: #d03b3b;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 20px rgba(0, 0, 0, 0.06);
-  --radius: 16px;
-  --tabs-h: 64px;
 }
+/* dark mode: follows the phone setting unless Light is chosen, or forced with Dark */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme="light"]), :root:not([data-theme="light"]) [data-palette] {
     color-scheme: dark;
-    --page: #0d0d0d; --card: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-    --line: #2c2c2a; --track: #2a2a28; --ring: rgba(255, 255, 255, 0.10);
-    --accent: #3987e5; --good: #0ca30c; --bad: #e66767;
+    --page: var(--page-d); --card: var(--card-d); --ink: var(--ink-d); --ink2: var(--ink2-d); --muted: var(--muted-d);
+    --line: var(--line-d); --track: var(--track-d); --ring: var(--ring-d); --accent: var(--accent-d); --on-accent: var(--on-accent-d);
+    --good: #0ca30c; --bad: #e66767;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
     --shadow: none;
   }
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"], :root[data-theme="dark"] [data-palette] {
   color-scheme: dark;
-  --page: #0d0d0d; --card: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-  --line: #2c2c2a; --track: #2a2a28; --ring: rgba(255, 255, 255, 0.10);
-  --accent: #3987e5; --good: #0ca30c; --bad: #e66767;
+  --page: var(--page-d); --card: var(--card-d); --ink: var(--ink-d); --ink2: var(--ink2-d); --muted: var(--muted-d);
+  --line: var(--line-d); --track: var(--track-d); --ring: var(--ring-d); --accent: var(--accent-d); --on-accent: var(--on-accent-d);
+  --good: #0ca30c; --bad: #e66767;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
   --shadow: none;
@@ -236,6 +266,33 @@ h1, h2 { margin: 0; }
 .money-input span { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); }
 .alloc { display: grid; gap: 4px; padding: 10px 12px; background: var(--track); border-radius: 12px; margin-bottom: 8px; font-size: 14px; }
 .card > .btn.full { margin-top: 8px; }
+
+/* theme picker: each button carries its own data-palette, so it previews that theme */
+.palettes { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.pal {
+  display: grid; gap: 6px; padding: 8px; border-radius: 14px; text-align: left;
+  background: var(--page); color: var(--ink); border: 2px solid var(--line);
+}
+.pal.on { border-color: var(--accent); }
+.pal-prev { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; height: 36px; }
+.pal-prev i { border-radius: 8px; background: var(--accent); }
+.pal-prev b { border-radius: 8px; background: var(--card); border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; color: var(--ink); font-weight: 700; }
+.pal-name { font-size: 12px; font-weight: 600; }
+
+/* sync */
+.sync-pill {
+  border: 1px solid var(--line); background: var(--card); border-radius: 999px;
+  padding: 4px 10px; font-size: 13px; font-weight: 600; margin-right: 6px; color: var(--ink2);
+}
+.sync-pill.warn { border-color: var(--accent); color: var(--accent); }
+.sync-pill.err { border-color: var(--bad); color: var(--bad); }
+.top-right { display: flex; align-items: center; }
+.sync-info { display: grid; gap: 2px; margin-bottom: 10px; font-size: 14px; }
+.btn.google { display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--card); border-color: var(--line); }
+.btn.google svg { width: 18px; height: 18px; }
+a.btn { text-decoration: none; text-align: center; display: block; color: inherit; }
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- sheet ---------- */
 .sheet-wrap { position: fixed; inset: 0; z-index: 20; }

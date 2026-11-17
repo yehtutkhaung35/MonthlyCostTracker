@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Monthly Cost</title>
   <meta name="description" content="Track daily spending by budget type">
-  <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f9f9f7">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -15,7 +14,7 @@
 <body>
   <header class="topbar">
     <h1 id="title">Monthly Cost</h1>
-    <div id="streak"></div>
+    <div class="top-right"><span id="syncPill"></span><span id="streak"></span></div>
   </header>
 
   <main id="view" class="view"></main>
@@ -33,7 +32,9 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script src="config.js"></script>
   <script src="i18n.js"></script>
+  <script src="sync.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

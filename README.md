@@ -16,8 +16,26 @@ Live: https://yehtutkhaung35.github.io/MonthlyCostTracker/
 
 ## Data
 
-- Phase 1: data is stored only on the device (browser storage). Use **Settings → Export backup** now and then.
-- Phase 2 (planned): Google sign-in that syncs to your own private Google Sheet.
+- Every change is saved on the phone first, so the app works offline.
+- **Google Sheets sync** (optional): sign in with Google in **Settings**. The app creates a private
+  Google Sheet called **"Monthly Cost Tracker"** in *your own* Drive and keeps it in sync. Open it on PC to view your data.
+  - Tabs: `Entries` (one row per expense, newest first), `Types` (budget types), `Summary` (month × type totals),
+    plus hidden `Settings` and `Deleted` tabs the app uses for syncing.
+  - Edit in the app, view in the Sheet. Changes typed directly into the Sheet may be overwritten.
+  - The app uses the `drive.file` permission, so it can only see files it created.
+
+## Google sign-in setup (one time, by the app owner)
+
+1. Go to https://console.cloud.google.com and create a project (e.g. "Monthly Cost Tracker").
+2. **APIs & Services → Library**: enable **Google Sheets API** and **Google Drive API**.
+3. **Google Auth Platform / OAuth consent screen**: User type **External**. Fill in the app name and your email.
+   Under **Data access / Scopes**, add `.../auth/drive.file`.
+   Under **Audience / Test users**, add your Gmail address and your friends' addresses. Leave the app in **Testing**.
+4. **Clients / Credentials → Create OAuth client ID** → type **Web application**.
+   **Authorized JavaScript origins**: `https://yehtutkhaung35.github.io` (no path, no trailing slash).
+5. Copy the **Client ID** into `config.js` (`googleClientId`), commit, and push.
+
+Anyone not on the test-user list cannot sign in. Add or remove people anytime in step 3.
 
 ## Deploy (GitHub Pages)
 
@@ -40,6 +58,8 @@ If a phone still shows an old version, close the app fully and open it again.
 |---|---|
 | `index.html` | Page shell |
 | `app.js` | App logic: data, budget maths, screens |
+| `sync.js` | Google sign-in and Google Sheet sync |
+| `config.js` | Google Client ID (public, not a secret) |
 | `i18n.js` | English and Myanmar text |
 | `style.css` | Styles (light and dark) |
 | `manifest.json`, `icons/` | Makes it installable |
