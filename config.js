@@ -8,5 +8,5 @@
  *   Leave it empty to run without Google sync.
  */
 window.MCT_CONFIG = {
-  googleClientId: '',
+  googleClientId: '463984281575-3mbag2mdvch3lujph7rvufu0h77udd03.apps.googleusercontent.com',
 };
