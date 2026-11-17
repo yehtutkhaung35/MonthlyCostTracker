@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Monthly Cost</title>
+  <meta name="description" content="Track daily spending by budget type">
+  <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">Monthly Cost</h1>
+    <div id="streak"></div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <button id="fab" class="fab" data-act="add" aria-label="Add expense">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+
+  <nav id="tabs" class="tabs" aria-label="Main"></nav>
+
+  <div id="sheetWrap" class="sheet-wrap" hidden>
+    <div class="sheet-backdrop" data-act="close-sheet"></div>
+    <div id="sheet" class="sheet" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
