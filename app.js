@@ -6,7 +6,7 @@
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.3.2';
+const APP_VERSION = '0.3.3';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -136,23 +136,38 @@ function defaultTypeFor(dateStr) {
   return types.find((t) => t.rule === 'day' && t.days.includes(wd)) || types[0];
 }
 
-/** Per-type numbers for a month. For per-day types also: saved (leftover from finished days) and today's figures. */
+/**
+ * Per-type numbers for a month.
+ * saved = budget for the finished days of the month (1st → yesterday) − what was spent on those days.
+ *   Per-day types: allowance of each finished active day (e.g. Sun–Fri for Daily Cost).
+ *   Monthly types: the monthly amount spread evenly over the month's days.
+ * Per-day types also get today's figures and how many of their days are left.
+ */
 function typeStats(t, y, m, list) {
   const mine = list.filter((e) => e.typeId === t.id);
   const spent = sumAmt(mine);
   const budget = typeBudget(t, y, m);
   const res = { t, spent, budget, left: budget - spent };
-  if (t.rule === 'day') {
-    const today = todayStr();
-    const k = monthKeyOf(y, m);
-    const n = daysInMonth(y, m);
+  const today = todayStr();
+  const k = monthKeyOf(y, m);
+  const n = daysInMonth(y, m);
+  const spentBefore = sumAmt(mine.filter((e) => e.date < today));
+  if (t.rule !== 'day') {
+    let doneDays = 0;
+    for (let d = 1; d <= n; d++) if (`${k}-${pad(d)}` < today) doneDays++;
+    res.saved = (t.archived ? 0 : Math.round((t.amount * doneDays) / n)) - spentBefore;
+  } else {
     let allowance = 0;
+    let daysLeft = 0;
     for (let d = 1; d <= n; d++) {
       const ds = `${k}-${pad(d)}`;
-      if (ds >= today) break;
-      if (!t.archived && t.days.includes(new Date(y, m, d).getDay())) allowance += t.amount;
+      const active = !t.archived && t.days.includes(new Date(y, m, d).getDay());
+      if (!active) continue;
+      if (ds >= today) daysLeft++;
+      else allowance += t.amount;
     }
-    res.saved = allowance - sumAmt(mine.filter((e) => e.date < today));
+    res.saved = allowance - spentBefore;
+    res.daysLeft = daysLeft; // includes today if today is one of this type's days
     if (today.startsWith(k)) {
       res.isToday = !t.archived && t.days.includes(new Date().getDay());
       res.todaySpent = sumAmt(mine.filter((e) => e.date === today));
@@ -264,6 +279,7 @@ function viewHome() {
       <div class="today-num"><strong>${money(s.todaySpent)}</strong> <span class="muted">/ ${money(s.t.amount)}</span></div>
       ${bar(s.todaySpent, s.t.amount, s.t.color)}
       <div class="small">${s.todayLeft >= 0 ? T('leftToday', { amt: money(s.todayLeft) }) : `<span class="neg">⚠ ${T('overToday', { amt: money(-s.todayLeft) })}</span>`}</div>
+      <div class="small muted">${T('typeDaysLeft', { n: s.daysLeft, name: esc(typeName(s.t)), amt: money(s.daysLeft * s.t.amount) })}</div>
     </div>`;
   });
   if (!hasSpend && !markedNoSpend) h += `<button class="btn ghost full" data-act="nospend">${T('noSpend')}</button>`;
@@ -274,7 +290,7 @@ function viewHome() {
   h += `<h2 class="sec out">${T('types')}</h2><div class="tgrid">`;
   stats.filter((s) => !s.t.archived).forEach((s) => {
     h += `<button class="card tcard" data-act="type-history" data-id="${s.t.id}">
-      <div class="tname">${s.t.emoji} ${esc(typeName(s.t))}${s.t.rule === 'day' ? ' ' + savedBadge(s.saved) : ''}</div>
+      <div class="tname">${s.t.emoji} ${esc(typeName(s.t))} ${savedBadge(s.saved)}</div>
       <div class="tnum"><strong>${num(s.spent)}</strong> <span class="muted">/ ${num(s.budget)}</span></div>
       ${bar(s.spent, s.budget, s.t.color)}
       <div class="small">${leftLine(s.left)}</div>
