@@ -6,7 +6,7 @@
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.3.1';
+const APP_VERSION = '0.3.2';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -930,5 +930,19 @@ render();
 if (params.get('action') === 'add') openEntrySheet();
 Sync.onStart();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // updateViaCache 'none': always fetch sw.js fresh, so new releases are noticed right away.
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+  // When a new version takes over, reload once to use it — but never while the user is typing in a form.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    const tryReload = () => { if (!ui.sheetOpen) location.reload(); else setTimeout(tryReload, 1000); };
+    tryReload();
+  });
+  // Check for a new version whenever the app comes back to the screen.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+  });
 }

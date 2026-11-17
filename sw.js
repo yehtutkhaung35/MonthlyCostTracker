@@ -1,7 +1,7 @@
 /* Service worker: lets the installed app open offline.
  * Network first (so updates show up right away), cached copy when offline.
  * Bump CACHE when you release, to clear old files. */
-const CACHE = 'mct-v4';
+const CACHE = 'mct-v5';
 const ASSETS = [
   './',
   'index.html',
@@ -31,8 +31,10 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  // cache: 'no-cache' = always ask GitHub if the file changed (GitHub Pages otherwise lets
+  // the browser reuse files for 10 minutes, which delays updates).
   e.respondWith(
-    fetch(req)
+    fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
