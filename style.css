@@ -274,6 +274,12 @@ h1, h2 { margin: 0; }
 .money-input { position: relative; }
 .money-input input { padding-right: 48px; font-variant-numeric: tabular-nums; font-weight: 600; }
 .money-input span { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.plan-nav { margin-bottom: 8px; }
+.plan-note {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; font-size: 13px; color: var(--ink2);
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
 .alloc { display: grid; gap: 4px; padding: 10px 12px; background: var(--track); border-radius: 12px; margin-bottom: 8px; font-size: 14px; }
 .card > .btn.full { margin-top: 8px; }
 

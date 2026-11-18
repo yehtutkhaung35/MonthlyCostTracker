@@ -1,12 +1,19 @@
 'use strict';
 /*
- * Monthly Cost Tracker — Phase 1
- * Offline-first: all data lives in this device's localStorage.
- * Every record carries id + updatedAt (+ deleted flag) so Phase 2 can sync with Google Sheets.
+ * Monthly Cost Tracker
+ * Offline-first: all data lives in this device's localStorage, and syncs to a Google Sheet when signed in.
+ * Every record carries id + updatedAt (+ deleted flag) so devices can be merged.
+ *
+ * Budgets are planned per month:
+ *   data.types  = the library of budget types (name, icon, color — shared by all months)
+ *   data.plans  = { 'YYYY-MM': { total, items: [{ typeId, rule, amount, days }], updatedAt } }
+ * A month without its own plan borrows the nearest earlier one (or later, if none earlier).
+ * The current month's plan is saved automatically when the month starts, so later edits
+ * to another month never change it.
  */
 
 const STORE_KEY = 'mct.v1';
-const APP_VERSION = '0.3.4';
+const APP_VERSION = '0.4.0';
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -44,7 +51,20 @@ function defaultData() {
     settings: { lang: 'en', theme: 'system', palette: 'blue', currency: 'Ks', monthlyTotal: 600000, totalUpdatedAt: '', example: true, updatedAt: t },
     types,
     entries: [],
+    plans: {},
     sync: {},
+  };
+}
+
+const cleanItem = (it) => ({ typeId: String(it.typeId), rule: it.rule === 'day' ? 'day' : 'month', amount: Number(it.amount) || 0, days: Array.isArray(it.days) ? it.days.map(Number) : [] });
+const clonePlan = (p) => ({ total: Number(p.total) || 0, items: (p.items || []).map(cleanItem), updatedAt: p.updatedAt || EPOCH });
+
+/** Build a plan from the old single (all-months) budget settings. */
+function legacyPlan(d) {
+  return {
+    total: d.settings.monthlyTotal,
+    items: d.types.filter((t) => !t.archived).map((t) => cleanItem({ typeId: t.id, rule: t.rule, amount: t.amount, days: t.days })),
+    updatedAt: EPOCH,
   };
 }
 
@@ -60,6 +80,16 @@ function load() {
         if (!hadTotalTs && !d.settings.example) d.settings.totalUpdatedAt = nowIso();
         if (!d.sync) d.sync = {};
         d.types.forEach((t) => { if (!Array.isArray(t.days)) t.days = []; });
+        // Upgrade from one budget for all months → a plan for the current month.
+        if (!d.plans || typeof d.plans !== 'object') {
+          const p = legacyPlan(d);
+          if (!d.settings.example) {
+            p.updatedAt = [d.settings.totalUpdatedAt].concat(d.types.map((t) => t.updatedAt))
+              .filter((x) => x && x !== EPOCH).sort().pop() || nowIso();
+          }
+          const c = currentYM();
+          d.plans = { [monthKeyOf(c.y, c.m)]: p };
+        }
         return d;
       }
     }
@@ -68,7 +98,7 @@ function load() {
 }
 
 let data = load();
-const ui = { tab: 'home', ym: currentYM(), filter: 'all', sheetOpen: false, histMode: 'day', day: todayStr() };
+const ui = { tab: 'home', ym: currentYM(), planYM: currentYM(), filter: 'all', sheetOpen: false, histMode: 'day', day: todayStr() };
 let persistAsked = false;
 
 /** Save to this device. Unless the save comes from sync itself, also queue a sync to Google. */
@@ -112,8 +142,69 @@ function dateLabel(s) {
   return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(d);
 }
 
+/* ---------- monthly plans ---------- */
+const byOrder = (a, b) => (a.order || 0) - (b.order || 0);
+const ymOfDate = (ds) => ({ y: Number(ds.slice(0, 4)), m: Number(ds.slice(5, 7)) - 1 });
+const ymLabelOfKey = (k) => monthLabel(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1);
+
+/** The plan that applies to a month: its own, or borrowed from the nearest month that has one. */
+function resolvePlan(key) {
+  if (data.plans[key]) return { plan: data.plans[key], own: true, from: key };
+  const keys = Object.keys(data.plans).sort();
+  const src = keys.filter((k) => k < key).pop() || keys.find((k) => k > key);
+  if (src) return { plan: data.plans[src], own: false, from: src };
+  return { plan: legacyPlan(data), own: false, from: null };
+}
+/** Give a month its own plan (a copy of what it currently borrows) so it can be edited on its own. */
+function ensurePlan(key) {
+  if (!data.plans[key]) data.plans[key] = clonePlan(resolvePlan(key).plan);
+  return data.plans[key];
+}
+/** Lock in the current month's plan when the month starts (keeps the borrowed timestamp, so a real edit elsewhere still wins a sync). */
+function ensureCurrentPlan() {
+  const c = currentYM();
+  const key = monthKeyOf(c.y, c.m);
+  if (!data.plans[key]) { ensurePlan(key); save({ fromSync: true }); }
+}
+const planOf = (y, m) => resolvePlan(monthKeyOf(y, m)).plan;
+const planTotal = (y, m) => planOf(y, m).total;
+
+/** Budget types in a month's plan, each merged with that month's rule / amount / days. */
+function planTypes(y, m) {
+  return planOf(y, m).items.map((it) => {
+    const lib = typeById(it.typeId);
+    return lib ? Object.assign({}, lib, { rule: it.rule, amount: it.amount, days: it.days.slice(), archived: false }) : null;
+  }).filter(Boolean).sort(byOrder);
+}
+/** A type that is not in the month's plan (e.g. spending on a type removed from that month): no budget. */
+const offPlan = (lib) => Object.assign({}, lib, { rule: 'month', amount: 0, days: [], archived: false, offPlan: true });
+/** The type as it applies on a given date (plan values for that month, or off-plan). */
+function typeForDate(typeId, ds) {
+  const { y, m } = ymOfDate(ds);
+  const t = planTypes(y, m).find((x) => x.id === typeId);
+  if (t) return t;
+  const lib = typeById(typeId);
+  return lib ? offPlan(lib) : null;
+}
+/** Plan types for a date's month, plus `extraId` if it is not in the plan (so an existing entry's type still shows). */
+function typesForDate(ds, extraId) {
+  const { y, m } = ymOfDate(ds);
+  const list = planTypes(y, m);
+  if (extraId && !list.some((t) => t.id === extraId) && typeById(extraId)) list.push(offPlan(typeById(extraId)));
+  return list;
+}
+/** The most recent plan settings used for a type, to pre-fill when reusing it in another month. */
+function lastPlanItem(typeId) {
+  const keys = Object.keys(data.plans).sort().reverse();
+  for (const k of keys) {
+    const it = data.plans[k].items.find((x) => x.typeId === typeId);
+    if (it) return it;
+  }
+  const lib = typeById(typeId);
+  return lib ? cleanItem({ typeId, rule: lib.rule, amount: lib.amount, days: lib.days }) : null;
+}
+
 /* ---------- budget-type logic ---------- */
-const activeTypes = () => data.types.filter((t) => !t.archived).sort((a, b) => (a.order || 0) - (b.order || 0));
 const typeById = (id) => data.types.find((t) => t.id === id);
 const typeName = (t) => (!t ? T('type.unknown') : t.name || (t.key ? T('type.' + t.key) : T('type.untitled')));
 const liveEntries = () => data.entries.filter((e) => !e.deleted);
@@ -132,7 +223,7 @@ function typeBudget(t, y, m) {
 }
 function defaultTypeFor(dateStr) {
   const wd = parseYmd(dateStr).getDay();
-  const types = activeTypes();
+  const types = typesForDate(dateStr);
   return types.find((t) => t.rule === 'day' && t.days.includes(wd)) || types[0];
 }
 
@@ -176,11 +267,13 @@ function typeStats(t, y, m, list) {
   }
   return res;
 }
+/** Stats for every type in the month's plan, plus off-plan types that still have spending that month. */
 function typesForMonth(y, m, list) {
-  return data.types
-    .filter((t) => !t.archived || list.some((e) => e.typeId === t.id))
-    .sort((a, b) => (a.order || 0) - (b.order || 0))
-    .map((t) => typeStats(t, y, m, list));
+  const types = planTypes(y, m);
+  data.types.forEach((lib) => {
+    if (!types.some((t) => t.id === lib.id) && list.some((e) => e.typeId === lib.id)) types.push(offPlan(lib));
+  });
+  return types.sort(byOrder).map((t) => typeStats(t, y, m, list));
 }
 function ruleSummary(t) {
   if (t.rule !== 'day') return T('ruleSum.month', { amt: money(t.amount) });
@@ -189,7 +282,7 @@ function ruleSummary(t) {
   return T('ruleSum.day', { amt: money(t.amount), days });
 }
 function nextColor() {
-  const used = activeTypes().map((t) => t.color);
+  const used = data.types.filter((t) => !t.archived).map((t) => t.color);
   for (let c = 1; c <= 8; c++) if (!used.includes(c)) return c;
   return 1;
 }
@@ -259,7 +352,7 @@ function viewHome() {
   const today = todayStr();
   const list = monthEntries(y, m);
   const spent = sumAmt(list);
-  const total = data.settings.monthlyTotal;
+  const total = planTotal(y, m);
   const daysLeft = daysInMonth(y, m) - new Date().getDate() + 1;
   const stats = typesForMonth(y, m, list);
   let h = '';
@@ -300,7 +393,7 @@ function viewHome() {
 
   // Budget type cards
   h += `<h2 class="sec out">${T('types')}</h2><div class="tgrid">`;
-  stats.filter((s) => !s.t.archived).forEach((s) => {
+  stats.filter((s) => !s.t.offPlan).forEach((s) => {
     h += `<button class="card tcard" data-act="type-history" data-id="${s.t.id}">
       <div class="tname">${s.t.emoji} ${esc(typeName(s.t))} ${typeBadge(s)}</div>
       <div class="tnum"><strong>${num(s.spent)}</strong> <span class="muted">/ ${num(s.budget)}</span></div>
@@ -325,7 +418,7 @@ function calendar(y, m) {
   const today = todayStr();
   const logged = loggedSet();
   const k = monthKeyOf(y, m);
-  const dayTypes = data.types.filter((t) => t.rule === 'day' && !t.archived);
+  const dayTypes = planTypes(y, m).filter((t) => t.rule === 'day');
   const spentBy = {};
   monthEntries(y, m).forEach((e) => { const key = e.date + '|' + e.typeId; spentBy[key] = (spentBy[key] || 0) + e.amount; });
   let cells = T('wd.mini').map((w) => `<span class="cal-wd">${w}</span>`).join('');
@@ -364,7 +457,7 @@ function viewHistoryDay() {
   if (ds !== today) h += `<div class="center"><button class="chip" data-act="day-today">${T('hist.today')}</button></div>`;
 
   // Per-day budgets that apply on this date (Daily Cost, or Saturday on Saturdays)
-  const dayTypes = activeTypes().filter((t) => t.rule === 'day' && t.days.includes(d.getDay()));
+  const dayTypes = typesForDate(ds).filter((t) => t.rule === 'day' && t.days.includes(d.getDay()));
   h += `<section class="card"><div class="row-between"><span class="muted">${T('hist.dayTotal')}</span><strong class="hero-day">${money(spent)}</strong></div>`;
   dayTypes.forEach((t) => {
     const s = sumAmt(items.filter((e) => e.typeId === t.id));
@@ -388,9 +481,9 @@ function viewHistoryMonth() {
   const monthAll = liveEntries().filter((e) => e.date.startsWith(k));
   let list = monthAll;
   if (ui.filter !== 'all') list = list.filter((e) => e.typeId === ui.filter);
-  const types = data.types
-    .filter((t) => !t.archived || monthAll.some((e) => e.typeId === t.id))
-    .sort((a, b) => (a.order || 0) - (b.order || 0));
+  const types = planTypes(y, m);
+  data.types.forEach((lib) => { if (!types.some((t) => t.id === lib.id) && monthAll.some((e) => e.typeId === lib.id)) types.push(lib); });
+  types.sort(byOrder);
   const chips = [`<button class="chip${ui.filter === 'all' ? ' on' : ''}" data-act="filter" data-v="all">${T('all')}</button>`]
     .concat(types.map((t) => `<button class="chip${ui.filter === t.id ? ' on' : ''}" data-act="filter" data-v="${t.id}" style="--c:${colorVar(t.color)}">${t.emoji} ${esc(typeName(t))}</button>`))
     .join('');
@@ -422,7 +515,7 @@ function viewStats() {
   const { y, m } = ui.ym;
   const list = monthEntries(y, m);
   const spent = sumAmt(list);
-  const total = data.settings.monthlyTotal;
+  const total = planTotal(y, m);
   const elapsed = elapsedDays(y, m);
   const avg = elapsed ? spent / elapsed : 0;
   const stats = typesForMonth(y, m, list);
@@ -493,10 +586,14 @@ function dailyChart(y, m, list) {
 
 function viewSettings() {
   const s = data.settings;
-  const { y, m } = currentYM();
-  const types = activeTypes();
+  const { y, m } = ui.planYM;
+  const key = monthKeyOf(y, m);
+  const rp = resolvePlan(key);
+  const types = planTypes(y, m);
+  const total = rp.plan.total;
   const allocated = types.reduce((a, t) => a + typeBudget(t, y, m), 0);
-  const diff = s.monthlyTotal - allocated;
+  const diff = total - allocated;
+  const monthName = monthLabel(y, m);
   const seg = (act, cur, opts) => `<div class="seg">${opts.map(([v, label]) =>
     `<button data-act="${act}" data-v="${v}" class="${cur === v ? 'on' : ''}">${label}</button>`).join('')}</div>`;
 
@@ -513,8 +610,14 @@ function viewSettings() {
 
   <section class="card">
     <h2 class="sec">${T('budget')}</h2>
-    <label class="field"><span>${T('monthlyTotal')}</span>
-      <div class="money-input"><input id="totalInput" inputmode="numeric" data-money value="${num(s.monthlyTotal)}"><span>${s.currency}</span></div></label>
+    <div class="month-nav plan-nav">
+      <button class="icon-btn" data-act="plan-prev" aria-label="Previous month">‹</button>
+      <button class="month-label" data-act="plan-today">${monthName}</button>
+      <button class="icon-btn" data-act="plan-next" aria-label="Next month">›</button>
+    </div>
+    ${rp.own ? '' : `<p class="plan-note">${T('plan.inherited', { month: monthName, from: rp.from ? ymLabelOfKey(rp.from) : T('plan.defaults') })}</p>`}
+    <label class="field"><span>${T('plan.total', { month: monthName })}</span>
+      <div class="money-input"><input id="totalInput" inputmode="numeric" data-money value="${num(total)}"><span>${s.currency}</span></div></label>
     <div class="alloc">
       <div class="row-between"><span class="muted">${T('allocated')}</span><span class="tabnum">${money(allocated)}</span></div>
       <div class="row-between"><span class="muted">${diff >= 0 ? T('unallocated') : '⚠ ' + T('overAllocated')}</span><strong class="tabnum ${diff < 0 ? 'neg' : 'pos'}">${money(Math.abs(diff))}</strong></div>
@@ -523,7 +626,8 @@ function viewSettings() {
       <span class="eicon" style="--c:${colorVar(t.color)}">${t.emoji}</span>
       <span class="emain"><span class="eitem">${esc(typeName(t))}</span><span class="esub">${ruleSummary(t)}</span></span>
       <span class="eamt">${num(typeBudget(t, y, m))}</span></button>`).join('')}</div>
-    <button class="btn ghost full" data-act="add-type">+ ${T('addType')}</button>
+    ${types.length ? '' : `<p class="muted center">${T('plan.empty')}</p>`}
+    <button class="btn ghost full" data-act="add-type">+ ${T('plan.addTo', { month: monthName })}</button>
   </section>
 
   ${Sync.settingsCard()}
@@ -572,6 +676,7 @@ if (window.matchMedia) {
 }
 
 function render() {
+  ensureCurrentPlan();
   document.documentElement.lang = data.settings.lang === 'my' ? 'my' : 'en';
   $('#title').textContent = T('tab.' + ui.tab);
   Sync.updatePill();
@@ -625,7 +730,7 @@ function recentItems(typeId) {
 }
 
 function typeInfo(typeId, date, excludeId) {
-  const t = typeById(typeId);
+  const t = typeForDate(typeId, date);
   if (!t) return '';
   const others = liveEntries().filter((e) => e.typeId === typeId && e.id !== excludeId && !e.noSpend);
   if (t.rule === 'day') {
@@ -639,18 +744,19 @@ function typeInfo(typeId, date, excludeId) {
 
 function openEntrySheet(id, presetDate) {
   const src = id ? data.entries.find((e) => e.id === id) : null;
-  const types = activeTypes();
-  if (!types.length) { ui.tab = 'settings'; render(); return; }
   const startDate = src ? src.date : (presetDate || todayStr());
+  if (!src && !typesForDate(startDate).length) {
+    ui.tab = 'settings'; ui.planYM = ymOfDate(startDate); render(); toast(T('plan.empty')); return;
+  }
   const st = { typeId: src ? src.typeId : defaultTypeFor(startDate).id, date: startDate, touched: !!src };
-  const chipTypes = types.slice();
-  if (src && !types.some((t) => t.id === src.typeId) && typeById(src.typeId)) chipTypes.push(typeById(src.typeId));
+  const chipsHtml = () => typesForDate(st.date, st.typeId).map((t) =>
+    `<button type="button" class="chip big" data-type="${t.id}" style="--c:${colorVar(t.color)}">${t.emoji} ${esc(typeName(t))}</button>`).join('');
 
   const html = sheetHead(src ? T('edit') : T('add')) + `
   <form id="entryForm" class="form" autocomplete="off">
     <div class="amount-field"><input id="fAmount" inputmode="numeric" placeholder="0" value="${src ? num(src.amount) : ''}" aria-label="${esc(T('amount'))}"><span>${esc(data.settings.currency)}</span></div>
     <div class="field"><span>${T('budgetType')}</span>
-      <div class="chips">${chipTypes.map((t) => `<button type="button" class="chip big" data-type="${t.id}" style="--c:${colorVar(t.color)}">${t.emoji} ${esc(typeName(t))}</button>`).join('')}</div>
+      <div class="chips" id="fTypes">${chipsHtml()}</div>
       <p class="hint" id="fInfo"></p></div>
     <label class="field"><span>${T('item')}</span><input id="fItem" value="${esc(src ? src.item : '')}" placeholder="${esc(T('itemPh'))}" maxlength="60"></label>
     <div class="chips small-chips" id="fRecent"></div>
@@ -669,6 +775,7 @@ function openEntrySheet(id, presetDate) {
     const item = $('#fItem', root);
     bindAmount(amt);
     const refresh = () => {
+      $('#fTypes', root).innerHTML = chipsHtml(); // the date's month may have different budget types
       root.querySelectorAll('[data-type]').forEach((b) => b.classList.toggle('on', b.dataset.type === st.typeId));
       $('#fInfo', root).textContent = typeInfo(st.typeId, st.date, src && src.id);
       $('#fRecent', root).innerHTML = recentItems(st.typeId).map((e) =>
@@ -682,7 +789,7 @@ function openEntrySheet(id, presetDate) {
     });
     $('#fDate', root).addEventListener('change', (ev) => {
       st.date = ev.target.value || todayStr();
-      if (!st.touched) st.typeId = defaultTypeFor(st.date).id;
+      if (!st.touched) { const def = defaultTypeFor(st.date); if (def) st.typeId = def.id; }
       refresh();
     });
     if (src) {
@@ -696,6 +803,7 @@ function openEntrySheet(id, presetDate) {
       ev.preventDefault();
       const amount = parseAmt(amt.value);
       if (amount <= 0) { toast(T('err.amount')); amt.focus(); return; }
+      if (!st.typeId || !typeById(st.typeId)) { toast(T('plan.empty')); return; }
       const t = nowIso();
       const rec = src || { id: uid(), createdAt: t, deleted: false };
       Object.assign(rec, { date: st.date, amount, typeId: st.typeId, item: item.value.trim(), note: $('#fNote', root).value.trim(), noSpend: false, updatedAt: t });
@@ -709,17 +817,58 @@ function openEntrySheet(id, presetDate) {
   });
 }
 
-function openTypeSheet(id) {
-  const src = id ? typeById(id) : null;
-  const d = src ? JSON.parse(JSON.stringify(src)) : {
+/** "Add budget type to <month>": reuse one from another month, or create a new one. */
+function openAddTypeSheet() {
+  const { y, m } = ui.planYM;
+  const monthName = monthLabel(y, m);
+  const inPlan = new Set(planOf(y, m).items.map((it) => it.typeId));
+  const reusable = data.types.filter((t) => !t.archived && !inPlan.has(t.id)).sort(byOrder);
+  const html = sheetHead(T('plan.addTo', { month: monthName })) + `
+    <h3 class="sec">${T('plan.reuse')}</h3>
+    ${reusable.length ? `<div class="elist">${reusable.map((t) => {
+      const last = lastPlanItem(t.id);
+      return `<button class="erow" data-reuse="${t.id}">
+        <span class="eicon" style="--c:${colorVar(t.color)}">${t.emoji}</span>
+        <span class="emain"><span class="eitem">${esc(typeName(t))}</span><span class="esub">${last ? ruleSummary(Object.assign({}, t, last)) : ''}</span></span>
+        <span class="eamt">+</span></button>`;
+    }).join('')}</div>` : `<p class="muted">${T('plan.noneToReuse')}</p>`}
+    <button class="btn primary full" data-new-type="1" style="margin-top:12px">+ ${T('plan.createNew')}</button>`;
+  openSheet(html, (root) => {
+    root.addEventListener('click', (ev) => {
+      const r = ev.target.closest('[data-reuse]');
+      if (r) { openTypeSheet(r.dataset.reuse, 'reuse'); return; }
+      if (ev.target.closest('[data-new-type]')) openTypeSheet(null, 'new');
+    });
+  });
+}
+
+/**
+ * Edit a budget type for the month shown in Settings.
+ * mode 'edit'  = it is already in that month's plan
+ * mode 'reuse' = add an existing type to that month
+ * mode 'new'   = create a new type and add it to that month
+ * Name / icon / color are shared by all months; rule / amount / days belong to that month only.
+ */
+function openTypeSheet(id, mode) {
+  const { y, m } = ui.planYM;
+  const key = monthKeyOf(y, m);
+  const monthName = monthLabel(y, m);
+  const lib = id ? typeById(id) : null;
+  if (id && !lib) return;
+  mode = mode || 'edit';
+  const planItem = mode === 'edit' ? planOf(y, m).items.find((it) => it.typeId === id) : null;
+  const preset = planItem || (lib ? lastPlanItem(lib.id) : null) || { rule: 'month', amount: 0, days: [] };
+  const d = lib ? Object.assign(JSON.parse(JSON.stringify(lib)), { rule: preset.rule, amount: preset.amount, days: preset.days.slice() }) : {
     id: uid(), key: null, name: '', emoji: '💰', color: nextColor(), rule: 'month', amount: 0,
     days: [0, 1, 2, 3, 4, 5, 6], archived: false, order: Math.max(0, ...data.types.map((t) => t.order || 0)) + 1,
   };
-  const { y, m } = currentYM();
+  if (d.rule === 'day' && !d.days.length) d.days = [0, 1, 2, 3, 4, 5, 6];
   const cur = esc(data.settings.currency);
   const colors = [1, 2, 3, 4, 5, 6, 7, 8];
+  const title = (mode === 'new' ? T('newType') : T('editType')) + ' · ' + monthName;
 
-  const html = sheetHead(src ? T('editType') : T('newType')) + `
+  const html = sheetHead(title) + `
+  <p class="plan-note">${T('plan.note', { month: monthName })}</p>
   <form id="typeForm" class="form" autocomplete="off">
     <div class="row2">
       <label class="field emoji-field"><span>${T('emoji')}</span><input id="tEmoji" value="${esc(d.emoji)}" maxlength="8"></label>
@@ -735,7 +884,7 @@ function openTypeSheet(id) {
       <div class="days">${T('wd.short').map((w, i) => `<button type="button" data-d="${i}">${w}</button>`).join('')}</div></div>
     <p class="calc" id="tCalc"></p>
     <div class="sheet-actions">
-      ${src ? `<button type="button" class="btn danger" id="tDelete">${T('delete')}</button>` : ''}
+      ${mode === 'edit' ? `<button type="button" class="btn danger" id="tDelete">${T('plan.remove', { month: monthName })}</button>` : ''}
       <button type="submit" class="btn primary grow">${T('save')}</button>
     </div>
   </form>`;
@@ -767,23 +916,36 @@ function openTypeSheet(id) {
       if (sw) { d.color = Number(sw.dataset.c); sync(); }
     });
     amt.addEventListener('input', sync);
-    if (src) {
+    if (mode === 'edit') {
       $('#tDelete', root).addEventListener('click', () => {
-        if (!confirm(T('deleteType'))) return;
-        src.archived = true; src.updatedAt = nowIso();
+        if (!confirm(T('plan.removeConfirm', { month: monthName }))) return;
+        const plan = ensurePlan(key);
+        plan.items = plan.items.filter((it) => it.typeId !== d.id);
+        plan.updatedAt = nowIso();
+        data.settings.example = false;
         save(); closeSheet(); render(); toast(T('deleted'));
       });
     }
     $('#typeForm', root).addEventListener('submit', (ev) => {
       ev.preventDefault();
-      d.name = $('#tName', root).value.trim();
-      if (!d.key && !d.name) { toast(T('err.name')); return; }
+      const name = $('#tName', root).value.trim();
+      if (!d.key && !name) { toast(T('err.name')); return; }
       if (d.rule === 'day' && !d.days.length) { toast(T('err.days')); return; }
-      d.emoji = $('#tEmoji', root).value.trim() || '💰';
-      d.amount = parseAmt(amt.value);
-      d.updatedAt = nowIso();
-      const i = data.types.findIndex((t) => t.id === d.id);
-      if (i >= 0) data.types[i] = d; else data.types.push(d);
+      const now = nowIso();
+      // Shared look (all months): only bump its timestamp if it really changed.
+      const emoji = $('#tEmoji', root).value.trim() || '💰';
+      if (!lib) {
+        data.types.push({ id: d.id, key: null, name, emoji, color: d.color, rule: d.rule, amount: parseAmt(amt.value),
+          days: d.rule === 'day' ? d.days.slice() : [], archived: false, order: d.order, updatedAt: now });
+      } else if (lib.name !== name || lib.emoji !== emoji || lib.color !== d.color || lib.archived) {
+        Object.assign(lib, { name, emoji, color: d.color, archived: false, updatedAt: now });
+      }
+      // This month's budget for the type.
+      const plan = ensurePlan(key);
+      const item = cleanItem({ typeId: d.id, rule: d.rule, amount: parseAmt(amt.value), days: d.rule === 'day' ? d.days : [] });
+      const i = plan.items.findIndex((it) => it.typeId === d.id);
+      if (i >= 0) plan.items[i] = item; else plan.items.push(item);
+      plan.updatedAt = now;
       data.settings.example = false;
       save(); closeSheet(); render(); toast(T('savedToast'));
     });
@@ -809,6 +971,17 @@ function mergeById(local, incoming, valid) {
   });
   return { list: [...map.values()], n };
 }
+/** Merge monthly plans from a backup or the Google Sheet: per month, the newest edit wins. Returns how many changed. */
+function mergePlans(incoming) {
+  let n = 0;
+  Object.keys(incoming || {}).forEach((k) => {
+    const p = incoming[k];
+    if (!/^\d{4}-\d{2}$/.test(k) || !p || !Array.isArray(p.items)) return;
+    const cur = data.plans[k];
+    if (!cur || String(p.updatedAt || '') > String(cur.updatedAt || '')) { data.plans[k] = clonePlan(p); n++; }
+  });
+  return n;
+}
 function importFile(file) {
   if (!file) return;
   const reader = new FileReader();
@@ -821,11 +994,12 @@ function importFile(file) {
       types.list.forEach((t) => { if (!Array.isArray(t.days)) t.days = []; });
       data.types = types.list;
       data.entries = entries.list;
+      const n = mergePlans(inc.plans || {});
       if (inc.settings && String(inc.settings.updatedAt || '') > String(data.settings.updatedAt || '')) {
         data.settings = Object.assign(data.settings, inc.settings);
       }
       save(); applyTheme(); render();
-      toast(T('imported', { n: types.n + entries.n }));
+      toast(T('imported', { n: types.n + entries.n + n }));
     } catch (e) {
       toast(T('importErr'));
     }
@@ -894,8 +1068,11 @@ const actions = {
   'month-today': () => { ui.ym = currentYM(); render(); },
   filter: (el) => { ui.filter = el.dataset.v; render(); },
   'type-history': (el) => { ui.tab = 'history'; ui.histMode = 'month'; ui.filter = el.dataset.id; ui.ym = currentYM(); render(); window.scrollTo(0, 0); },
-  'edit-type': (el) => openTypeSheet(el.dataset.id),
-  'add-type': () => openTypeSheet(),
+  'edit-type': (el) => openTypeSheet(el.dataset.id, 'edit'),
+  'add-type': () => openAddTypeSheet(),
+  'plan-prev': () => { const d = new Date(ui.planYM.y, ui.planYM.m - 1, 1); ui.planYM = { y: d.getFullYear(), m: d.getMonth() }; render(); },
+  'plan-next': () => { const d = new Date(ui.planYM.y, ui.planYM.m + 1, 1); ui.planYM = { y: d.getFullYear(), m: d.getMonth() }; render(); },
+  'plan-today': () => { ui.planYM = currentYM(); render(); },
   'set-lang': (el) => { data.settings.lang = el.dataset.v; save({ fromSync: true }); render(); },
   'set-theme': (el) => { data.settings.theme = el.dataset.v; save({ fromSync: true }); applyTheme(); render(); },
   'set-palette': (el) => { data.settings.palette = el.dataset.v; save({ fromSync: true }); applyTheme(); render(); },
@@ -932,9 +1109,10 @@ document.addEventListener('pointerover', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.id === 'totalInput') {
-    data.settings.monthlyTotal = parseAmt(el.value);
+    const plan = ensurePlan(monthKeyOf(ui.planYM.y, ui.planYM.m));
+    plan.total = parseAmt(el.value);
+    plan.updatedAt = nowIso();
     data.settings.example = false;
-    data.settings.totalUpdatedAt = nowIso();
     save(); render();
   } else if (el.id === 'dayInput') {
     if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { ui.day = el.value; render(); }

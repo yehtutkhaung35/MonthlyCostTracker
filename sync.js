@@ -21,6 +21,8 @@ const Sync = (() => {
   const ENTRY_COLS = ['Date', 'Item', 'Budget type', 'Amount', 'Note', 'No spending', 'id', 'typeId', 'createdAt', 'updatedAt'];
   const TYPE_COLS = ['Name', 'Rule', 'Amount', 'Days', 'Icon', 'id', 'key', 'customName', 'color', 'archived', 'order', 'updatedAt'];
   const SETTING_COLS = ['key', 'value', 'updatedAt'];
+  // One row per (month, budget type), plus a TOTAL row per month.
+  const PLAN_COLS = ['Month', 'Budget type', 'Rule', 'Amount', 'Days', 'typeId', 'updatedAt'];
   const DEL_COLS = ['id', 'kind', 'updatedAt'];
   // Month × budget-type totals, for viewing on PC.
   const SUMMARY_FORMULA = '=QUERY({ARRAYFORMULA(LEFT(Entries!A2:A,7)),Entries!C2:C,Entries!D2:D},' +
@@ -128,7 +130,7 @@ const Sync = (() => {
     if (c.sheetId) {
       try {
         const f = await api(`${DRIVE}/files/${c.sheetId}?fields=id,trashed`);
-        if (!f.trashed) return c.sheetId;
+        if (!f.trashed) return ensureTabs(c.sheetId);
       } catch (e) {
         if (e.status !== 404) throw e;
       }
@@ -139,11 +141,11 @@ const Sync = (() => {
     const found = await api(`${DRIVE}/files?q=${q}&fields=files(id)&orderBy=createdTime&pageSize=5&spaces=drive`);
     if (found.files && found.files.length) {
       c.sheetId = found.files[0].id;
-      return c.sheetId;
+      return ensureTabs(c.sheetId);
     }
     // First time: create it.
     const summary = {
-      properties: { title: 'Summary', index: 2 },
+      properties: { title: 'Summary', index: 3 },
       data: [{ startRow: 0, startColumn: 0, rowData: [{ values: [{ userEnteredValue: { formulaValue: SUMMARY_FORMULA } }] }] }],
     };
     const created = await api(SHEETS, {
@@ -153,15 +155,30 @@ const Sync = (() => {
         sheets: [
           sheetSpec('Entries', 0, ENTRY_COLS),
           sheetSpec('Types', 1, TYPE_COLS),
+          sheetSpec('Plans', 2, PLAN_COLS),
           summary,
-          sheetSpec('Settings', 3, SETTING_COLS, true),
-          sheetSpec('Deleted', 4, DEL_COLS, true),
+          sheetSpec('Settings', 4, SETTING_COLS, true),
+          sheetSpec('Deleted', 5, DEL_COLS, true),
         ],
       },
     });
     c.sheetId = created.spreadsheetId;
+    tabsOk = c.sheetId;
     await api(`${DRIVE}/files/${c.sheetId}`, { method: 'PATCH', body: { appProperties: { [MARK.key]: MARK.value } } });
     return c.sheetId;
+  }
+
+  // Sheets made by an older version lack newer tabs (e.g. Plans): add them once.
+  let tabsOk = null;
+  async function ensureTabs(id) {
+    if (tabsOk === id) return id;
+    const info = await api(`${SHEETS}/${id}?fields=sheets.properties.title`);
+    const have = new Set((info.sheets || []).map((s) => s.properties.title));
+    const add = [];
+    if (!have.has('Plans')) add.push({ addSheet: { properties: { title: 'Plans', index: 2, gridProperties: { frozenRowCount: 1 } } } });
+    if (add.length) await api(`${SHEETS}/${id}:batchUpdate`, { method: 'POST', body: { requests: add } });
+    tabsOk = id;
+    return id;
   }
 
   /* ---------- rows <-> records ---------- */
@@ -202,6 +219,30 @@ const Sync = (() => {
     return [typeName(t), t.rule === 'day' ? 'per day' : 'per month', t.amount, (t.days || []).join(','), t.emoji,
       t.id, t.key || '', t.name || '', t.color, !!t.archived, t.order || 0, t.updatedAt || ''];
   }
+  const parseDays = (v) => str(v).split(',').map((x) => x.trim()).filter((x) => x !== '').map(Number).filter((n) => n >= 0 && n <= 6);
+  function rowsToPlans(rows) {
+    const plans = {};
+    parseRows(rows).forEach((o) => {
+      const k = str(o.Month);
+      if (!/^\d{4}-\d{2}$/.test(k)) return;
+      const p = plans[k] || (plans[k] = { total: 0, items: [], updatedAt: '' });
+      if (str(o.updatedAt) > p.updatedAt) p.updatedAt = str(o.updatedAt);
+      if (!o.typeId) p.total = Number(o.Amount) || 0;
+      else p.items.push({ typeId: str(o.typeId), rule: str(o.Rule) === 'per day' ? 'day' : 'month', amount: Number(o.Amount) || 0, days: parseDays(o.Days) });
+    });
+    return plans;
+  }
+  function plansToRows() {
+    const rows = [];
+    Object.keys(data.plans).sort().reverse().forEach((k) => {
+      const p = data.plans[k];
+      const ts = str(p.updatedAt);
+      rows.push([k, 'TOTAL', '', p.total, '', '', ts]);
+      p.items.forEach((it) => rows.push([k, typeName(typeById(it.typeId)), it.rule === 'day' ? 'per day' : 'per month',
+        it.amount, it.days.join(','), it.typeId, ts]));
+    });
+    return rows;
+  }
 
   /* ---------- sync ---------- */
   async function syncNow() {
@@ -212,9 +253,9 @@ const Sync = (() => {
     setStatus('syncing');
     try {
       const id = await ensureSheet();
-      const ranges = ['Entries!A:Z', 'Types!A:Z', 'Settings!A:Z', 'Deleted!A:Z'].map((r) => 'ranges=' + encodeURIComponent(r)).join('&');
+      const ranges = ['Entries!A:Z', 'Types!A:Z', 'Plans!A:Z', 'Deleted!A:Z'].map((r) => 'ranges=' + encodeURIComponent(r)).join('&');
       const got = await api(`${SHEETS}/${id}/values:batchGet?${ranges}&valueRenderOption=UNFORMATTED_VALUE`);
-      const [eRows, tRows, sRows, dRows] = got.valueRanges.map((v) => v.values || []);
+      const [eRows, tRows, pRows, dRows] = got.valueRanges.map((v) => v.values || []);
 
       // 1) merge remote into local
       const remoteEntries = parseRows(eRows).map(rowToEntry).filter(Boolean);
@@ -228,22 +269,16 @@ const Sync = (() => {
       const typ = mergeById(data.types, remoteTypes, (t) => t.rule === 'day' || t.rule === 'month');
       data.entries = ent.list;
       data.types = typ.list;
-      let changed = ent.n + typ.n;
-      if (typ.n) data.settings.example = false;
-      const remoteTotal = parseRows(sRows).find((x) => x.key === 'monthlyTotal');
-      if (remoteTotal && str(remoteTotal.updatedAt) > str(data.settings.totalUpdatedAt)) {
-        data.settings.monthlyTotal = Number(remoteTotal.value) || 0;
-        data.settings.totalUpdatedAt = str(remoteTotal.updatedAt);
-        data.settings.example = false;
-        changed++;
-      }
+      const plansChanged = mergePlans(rowsToPlans(pRows));
+      const changed = ent.n + typ.n + plansChanged;
+      if (typ.n || plansChanged) data.settings.example = false;
 
       // 2) write the merged result back (newest first, easy to read on PC)
       const live = data.entries.filter((e) => !e.deleted)
         .sort((a, b) => (str(b.date) + str(b.createdAt)).localeCompare(str(a.date) + str(a.createdAt)));
       const eVals = [ENTRY_COLS].concat(live.map(entryToRow));
       const tVals = [TYPE_COLS].concat(data.types.slice().sort((a, b) => (a.order || 0) - (b.order || 0)).map(typeToRow));
-      const sVals = [SETTING_COLS, ['monthlyTotal', data.settings.monthlyTotal, str(data.settings.totalUpdatedAt)]];
+      const pVals = [PLAN_COLS].concat(plansToRows());
       const dVals = [DEL_COLS].concat(data.entries.filter((e) => e.deleted).map((e) => [e.id, 'entry', str(e.updatedAt)]));
       await api(`${SHEETS}/${id}/values:batchUpdate`, {
         method: 'POST',
@@ -252,7 +287,7 @@ const Sync = (() => {
           data: [
             { range: 'Entries!A1', values: eVals },
             { range: 'Types!A1', values: tVals },
-            { range: 'Settings!A1', values: sVals },
+            { range: 'Plans!A1', values: pVals },
             { range: 'Deleted!A1', values: dVals },
           ],
         },
@@ -261,6 +296,7 @@ const Sync = (() => {
       const clear = [];
       if (eRows.length > eVals.length) clear.push(`Entries!A${eVals.length + 1}:Z${eRows.length}`);
       if (tRows.length > tVals.length) clear.push(`Types!A${tVals.length + 1}:Z${tRows.length}`);
+      if (pRows.length > pVals.length) clear.push(`Plans!A${pVals.length + 1}:Z${pRows.length}`);
       if (dRows.length > dVals.length) clear.push(`Deleted!A${dVals.length + 1}:Z${dRows.length}`);
       if (clear.length) await api(`${SHEETS}/${id}/values:batchClear`, { method: 'POST', body: { ranges: clear } });
 
